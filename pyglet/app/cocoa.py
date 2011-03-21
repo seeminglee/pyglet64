@@ -34,77 +34,82 @@
 
 '''
 '''
-from __future__ import with_statement
-
 __docformat__ = 'restructuredtext'
 __version__ = '$Id: $'
 
 from pyglet.app.base import PlatformEventLoop
-from pyglet.libs.darwin import *
+from pyglet.libs.darwin.objc_runtime import *
+
+def add_menu_item(menu, title, action, key):
+    menuItem = send_message('NSMenuItem', 'alloc')
+    title = CFSTR(title)
+    action = get_selector(action)
+    key = CFSTR(key)
+    send_message(menuItem, 'initWithTitle:action:keyEquivalent:', title, action, key)
+    send_message(menu, 'addItem:', menuItem)
+    # cleanup
+    send_message(title, 'release')
+    send_message(key, 'release')
+    send_message(menuItem, 'release')
+
+def create_menu():
+    nsapp = send_message('NSApplication', 'sharedApplication')
+    menubar = alloc_init_autorelease('NSMenu')
+    appMenuItem = alloc_init_autorelease('NSMenuItem')
+    send_message(menubar, 'addItem:', appMenuItem)
+    send_message(nsapp, 'setMainMenu:', menubar)
+    appMenu = alloc_init_autorelease('NSMenu')
+
+    # Hide still doesn't work!?
+    add_menu_item(appMenu, 'Hide!', 'hide:', 'h')
+    send_message(appMenu, 'addItem:', send_message('NSMenuItem', 'separatorItem'))
+    add_menu_item(appMenu, 'Quit!', 'terminate:', 'q')
+
+    send_message(appMenuItem, 'setSubmenu:', appMenu)
 
 class CocoaEventLoop(PlatformEventLoop):
 
     def __init__(self):
         super(CocoaEventLoop, self).__init__()
         # Prepare the default application.
-        NSApplication.sharedApplication()
+        self.NSApp = send_message('NSApplication', 'sharedApplication')
         # Create an autorelease pool for menu creation and finishLaunching
-        pool = NSAutoreleasePool.alloc().init()
-        self._create_application_menu()
-        NSApp().finishLaunching()
-        NSApp().activateIgnoringOtherApps_(True)
-        # Then get rid of the pool when we're done.
-        del pool
-
-    def _create_application_menu(self):
-        # Sets up a menu and installs a "quit" item so that we can use
-        # Command-Q to exit the application.
-        # See http://cocoawithlove.com/2010/09/minimalist-cocoa-programming.html
-        # This could also be done much more easily with a NIB.
-        menubar = NSMenu.alloc().init()
-        appMenuItem = NSMenuItem.alloc().init()
-        menubar.addItem_(appMenuItem)
-        NSApp().setMainMenu_(menubar)
-        appMenu = NSMenu.alloc().init()
-        processName = NSProcessInfo.processInfo().processName()
-        hideItem = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Hide " + processName, "hide:", "h")
-        appMenu.addItem_(hideItem)
-        appMenu.addItem_(NSMenuItem.separatorItem())
-        quitItem = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Quit " + processName, "terminate:", "q")
-        appMenu.addItem_(quitItem)
-        appMenuItem.setSubmenu_(appMenu)
+        self.pool = alloc_init('NSAutoreleasePool')
+        create_menu()
+        send_message(self.NSApp, 'finishLaunching')
+        send_message(self.NSApp, 'activateIgnoringOtherApps:', True)
+        #send_message(self.pool, 'drain')
 
     def start(self):
         pass
 
     def step(self, timeout=None):
         # Create an autorelease pool for this iteration.
-        pool = NSAutoreleasePool.alloc().init()
+        send_message(self.pool, 'drain')
+        self.pool = alloc_init('NSAutoreleasePool')
 
         # Determine the timeout date.
         if timeout is None:
             # Using distantFuture as untilDate means that nextEventMatchingMask
             # will wait until the next event comes along.
-            timeout_date = NSDate.distantFuture()
+            timeout_date = send_message('NSDate', 'distantFuture')
         else:
-            timeout_date = NSDate.dateWithTimeIntervalSinceNow_(timeout)
+            timeout_date = send_message('NSDate', 'dateWithTimeIntervalSinceNow:', timeout, argtypes=[c_double])
 
         # Retrieve the next event (if any).  We wait for an event to show up
         # and then process it, or if timeout_date expires we simply return.
         # We only process one event per call of step().
         self._is_running.set()
-        event = NSApp().nextEventMatchingMask_untilDate_inMode_dequeue_(
+        event = send_message(self.NSApp, 'nextEventMatchingMask:untilDate:inMode:dequeue:',
                 NSAnyEventMask, timeout_date, NSDefaultRunLoopMode, True)
 
         # Dispatch the event (if any).
         if event is not None:
-            event_type = event.type()
+            event_type = send_message(event, 'type', restype=c_uint)
             if event_type != NSApplicationDefined:
                 # Send out event as normal.  Responders will still receive 
                 # keyUp:, keyDown:, and flagsChanged: events.
-                NSApp().sendEvent_(event)
+                send_message(self.NSApp, 'sendEvent:', event)
 
                 # Resend key events as special pyglet-specific messages
                 # which supplant the keyDown:, keyUp:, and flagsChanged: messages
@@ -114,14 +119,14 @@ class CocoaEventLoop(PlatformEventLoop):
                 # replacements ensure that we see all the raw key presses & releases.
                 # We also filter out key-down repeats since pyglet only sends one
                 # on_key_press event per key press.
-                if event_type == NSKeyDown and not event.isARepeat():
-                    NSApp().sendAction_to_from_("pygletKeyDown:", None, event)
+                if event_type == NSKeyDown and not send_message(event, 'isARepeat', restype=c_bool):
+                    send_message(self.NSApp, 'sendAction:to:from:', get_selector('pygletKeyDown:'), None, event)
                 elif event_type == NSKeyUp:
-                    NSApp().sendAction_to_from_("pygletKeyUp:", None, event)
+                    send_message(self.NSApp, 'sendAction:to:from:', get_selector('pygletKeyUp:'), None, event)
                 elif event_type == NSFlagsChanged:
-                    NSApp().sendAction_to_from_("pygletFlagsChanged:", None, event)
+                    send_message(self.NSApp, 'sendAction:to:from:', get_selector('pygletFlagsChanged:'), None, event)
 
-            NSApp().updateWindows()
+            send_message(self.NSApp, 'updateWindows')
             did_time_out = False
         else:
             did_time_out = True
@@ -129,25 +134,25 @@ class CocoaEventLoop(PlatformEventLoop):
         self._is_running.clear()
 
         # Destroy the autorelease pool used for this step.
-        del pool
-
+        #send_message(pool, 'drain')
+        
         return did_time_out
     
     def stop(self):
         pass
 
     def notify(self):
-        pool = NSAutoreleasePool.alloc().init()
-        notifyEvent = NSEvent.otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2_(
-                    NSApplicationDefined, # type
-                    NSPoint(0.0, 0.0),    # location
-                    0,                    # modifierFlags
-                    0,                    # timestamp
-                    0,                    # windowNumber
-                    None,                 # graphicsContext
-                    0,                    # subtype
-                    0,                    # data1
-                    0,                    # data2
-                    )
-        NSApp().postEvent_atStart_(notifyEvent, False)
-        del pool
+        pool = alloc_init('NSAutoreleasePool')
+        notifyEvent = send_message('NSEvent', 'otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:',
+                                   NSApplicationDefined, # type
+                                   NSPoint(0.0, 0.0),    # location
+                                   0,                    # modifierFlags
+                                   0,                    # timestamp
+                                   0,                    # windowNumber
+                                   None,                 # graphicsContext
+                                   0,                    # subtype
+                                   0,                    # data1
+                                   0,                    # data2
+                                   argtypes=[NSUInteger, NSPoint, NSUInteger, NSTimeInterval, NSInteger, c_void_p, c_short, NSInteger, NSInteger])
+        send_message(self.NSApp, 'postEvent:atStart:', notifyEvent, False, argtypes=[c_void_p, c_bool])
+        send_message(pool, 'drain')

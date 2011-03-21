@@ -2,11 +2,7 @@ import pyglet
 
 # Cocoa implementation:
 if pyglet.options['darwin_cocoa']:
-    from Foundation import *
-    from Cocoa import *
-    from Quartz import *
-
-    NSAnyEventMask = 0xFFFFFFFFL
+    pass
 
 # Carbon implementation:
 else:

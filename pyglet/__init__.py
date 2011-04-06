@@ -193,12 +193,9 @@ def _choose_darwin_platform():
     is_64bits = sys.maxint > 2**32
     import platform
     osx_version = platform.mac_ver()[0]
-    from objc import __version__ as pyobjc_version
     if is_64bits:
         if osx_version < '10.6':
             raise Exception('pyglet is not compatible with 64-bit Python for versions of Mac OS X prior to 10.6.')
-        if pyobjc_version < '2.2':
-            raise Exception('pyglet is not compatible with 64-bit Python for versions of PyObjC prior to 2.2')            
         options['darwin_cocoa'] = True
     else:
         options['darwin_cocoa'] = False        

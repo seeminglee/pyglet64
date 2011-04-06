@@ -8,12 +8,13 @@ __version__ = '$Id: $'
 
 from pyglet.gl.base import Config, CanvasConfig, Context
 
-from pyglet.libs.darwin import *
 from pyglet.gl import ContextException
 from pyglet.gl import gl
 from pyglet.gl import agl
 
 from pyglet.canvas.cocoa import CocoaCanvas
+
+from pyglet.libs.darwin.objc_runtime import *
 
 
 # Valid names for GL attributes and their corresponding NSOpenGL constant.
@@ -100,14 +101,18 @@ class CocoaConfig(Config):
         # http://developer.apple.com/library/mac/#documentation/GraphicsImaging/Conceptual/OpenGL-MacProgGuide/opengl_fullscreen/opengl_cgl.html%23//apple_ref/doc/uid/TP40001987-CH210-SW6
         attrs.append(NSOpenGLPFAFullScreen)
         attrs.append(NSOpenGLPFAScreenMask)
-        attrs.append(CGDisplayIDToOpenGLDisplayMask(CGMainDisplayID()))
+        attrs.append(quartz.CGDisplayIDToOpenGLDisplayMask(quartz.CGMainDisplayID()))
         
         # Terminate the list.
         attrs.append(0)
 
+        attrsArrayType = c_uint32 * len(attrs)
+        attrsArray = attrsArrayType(*attrs)
+
         # Create the pixel format.
-        pixel_format = NSOpenGLPixelFormat.alloc().initWithAttributes_(attrs)
-                
+        pixel_format = send_message('NSOpenGLPixelFormat', 'alloc')
+        pixel_format = send_message(pixel_format, 'initWithAttributes:', attrsArray, argtypes=[attrsArrayType])
+        
         # Return the match list.
         if pixel_format is None:
             return []
@@ -124,9 +129,10 @@ class CocoaCanvasConfig(CanvasConfig):
         # Query values for the attributes of the pixel format, and then set the
         # corresponding attributes of the canvas config.
         for name, attr in _gl_attributes.items():
-            value = self._pixel_format.getValues_forAttribute_forVirtualScreen_(None, attr, 0)
-            if value is not None:
-                setattr(self, name, value)
+            vals = c_long()
+            send_message(self._pixel_format, 'getValues:forAttribute:forVirtualScreen:',
+                         byref(vals), attr, 0, argtypes=[POINTER(c_long), c_int, c_long])
+            setattr(self, name, vals.value)
         
         # Set these attributes so that we can run pyglet.info.
         for name, value in _fake_gl_attributes.items():
@@ -140,9 +146,10 @@ class CocoaCanvasConfig(CanvasConfig):
             share_context = None
 
         # Create a new NSOpenGLContext.
-        nscontext = NSOpenGLContext.alloc().initWithFormat_shareContext_(
-            self._pixel_format,
-            share_context)
+        nscontext = send_message('NSOpenGLContext', 'alloc')
+        nscontext = send_message(nscontext, 'initWithFormat:shareContext:',
+                                 self._pixel_format,
+                                 share_context)
 
         return CocoaContext(self, nscontext, share)
 
@@ -161,49 +168,41 @@ class CocoaContext(Context):
         super(CocoaContext, self).attach(canvas)
         # The NSView instance should be attached to a nondeferred window before calling
         # setView, otherwise you get an "invalid drawable" message.
-        self._nscontext.setView_(canvas.nsview)
+        send_message(self._nscontext, 'setView:', canvas.nsview)
         self.set_current()
 
     def detach(self):
         super(CocoaContext, self).detach()
-        self._nscontext.clearDrawable()
+        send_message(self._nscontext, 'clearDrawable')
 
     def set_current(self):
-        self._nscontext.makeCurrentContext()
+        send_message(self._nscontext, 'makeCurrentContext')
         super(CocoaContext, self).set_current()
 
     def update_geometry(self):
         # Need to call this method whenever the context drawable (an NSView)
         # changes size or location.
-        self._nscontext.update()
+        send_message(self._nscontext, 'update')
 
     def set_full_screen(self):
-        self._nscontext.makeCurrentContext()
-        self._nscontext.setFullScreen()
+        send_message(self._nscontext, 'makeCurrentContext')
+        send_message(self._nscontext, 'setFullScreen')
 
     def destroy(self):
         super(CocoaContext, self).destroy()
+        send_message(self._nscontext, 'release')
         self._nscontext = None
 
     def set_vsync(self, vsync=True):
-        from objc import __version__ as pyobjc_version
-        if float(pyobjc_version[:3]) >= 2.3:
-            self._nscontext.setValues_forParameter_(vsync, NSOpenGLCPSwapInterval)
-        # While the following code works for PyObjC 2.2, it is so ugly that I
-        # would rather just leave it commented out.
-        # else:
-        #     from ctypes import cdll, util, c_void_p, c_int, byref
-        #     cglContext = self._nscontext.CGLContextObj()
-        #     dir(cglContext) # must call dir in order to access pointerAsInteger???
-        #     ctypes_context = c_void_p(cglContext.pointerAsInteger)
-        #     quartz = cdll.LoadLibrary(util.find_library('Quartz'))
-        #     value = c_int(vsync)
-        #     kCGLCPSwapInterval = 222
-        #     quartz.CGLSetParameter(ctypes_context, kCGLCPSwapInterval, byref(value))
+        vals = c_long(vsync)
+        send_message(self._nscontext, 'setValues:forParameter:',
+                     byref(vals), NSOpenGLCPSwapInterval, argtypes=[POINTER(c_long), c_int])
 
     def get_vsync(self):
-        value = self._nscontext.getValues_forParameter_(None, NSOpenGLCPSwapInterval)
-        return value
+        vals = c_long()
+        send_message(self._nscontext, 'getValues:forParameter:',
+                     byref(vals), NSOpenGLCPSwapInterval, argtypes=[POINTER(c_long), c_int])
+        return vals.value
         
     def flip(self):
-        self._nscontext.flushBuffer()
+        send_message(self._nscontext, 'flushBuffer')
